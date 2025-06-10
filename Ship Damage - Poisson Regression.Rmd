@@ -1,0 +1,127 @@
+---
+title: "poisson_regression"
+output: html_document
+date: "2024-11-08"
+---
+
+## Load Necessary Libraries
+
+```{r}
+library(haven) # Needed for reading in .dat files
+library(tidyverse) 
+library(datasets)
+library(assertr) # For data checks
+library(eeptools) # For data checks
+
+```
+
+## Read in Ship Damage Incidents Dataset
+
+### Variables Summary :
+
+#### type : Factor with levels "A" to "E" for the different ship types
+
+#### construction : factor with levels "1960-64", "1965-69", "1970-74", "1975-79" for the periods of ship construction
+
+#### operation : Factor with levels "1960-74", "1975-79" for the periods of operation
+
+#### months : Aggregate months of service, for all ships of specified type, construction, and operation
+
+#### damage : Number of incidents of wave damage for cargo carrying ships
+
+```{r}
+ship_data <- read.table("/Users/fillm/Desktop/Job Search Materials/Materials for Portfolio Project Creation/Poisson Regression/dataset/ships.dat", header = TRUE)
+```
+
+## Perform Data Checks
+
+```{r}
+## Confirm that all rows have at least 1 month of exposure
+ship_data |> assert(within_bounds(0, Inf, include.lower = FALSE, include.upper = FALSE), "months")
+
+## View unique values of each predictor variable, ensure values are consistent with what we expect them to contain 
+unique(ship_data$type)
+unique(ship_data$construction)
+unique(ship_data$operation)
+
+## Check that rows are unique by predictors
+isid(ship_data, vars = c("type", "construction", "operation")) # Returns TRUE, signifying the predictor columns together uniquely identify rows, as expected
+
+```
+
+## Create a Column for the Damage Incident Rate
+
+```{r}
+## Damage Incident Rate
+## Need to use a rate as the number of service months (exposure) are not equal across rows
+ship_data <- ship_data |>
+  mutate(
+    damage_rate = damage / months
+  )
+
+```
+
+## Check Assumption that the Independent Variable (Damage Rate) is poisson distributed
+
+```{r}
+## Create a histogram of damage rates, should follow a poisson distribution
+hist(ship_data$damage_rate) # Appears possibly poisson distributed at first glance
+
+## Check Independent variable mean and variance and compare them
+mean(ship_data$damage_rate)
+var(ship_data$damage_rate)
+mean(ship_data$damage_rate) / var(ship_data$damage_rate) # Mean and variance differ, suggesting equidispersion is not met 
+
+## Run a Kolmogorov-Smirnov Test to determine if damage rate is poisson distributed
+estimated_mean <- mean(ship_data$damage_rate) #use the mean of our ship dataset to use as the mean of poisson distribution we will test it against
+ks.test(ship_data$damage_rate, "ppois", lambda = estimated_mean) # extremely low p-value, reject null and conclude data are not poisson distributed
+
+```
+
+## Create A Model of Damage Incident Rate
+
+### Use Quasi-Poisson as we are modeling count data, and the mean-variance condition appears to not be met
+
+### Including Ship type (type), Construction Period (construction), and Operation Period (operation) as predictors
+
+### Including Number of Months (months) as an offset term to control for differing exposures in each row
+
+```{r}
+## Create Quasi-Poisson Regression Model
+ship_model <- glm(damage ~ type + construction + operation + offset(log(months)), family = quasipoisson(link = "log"), data = ship_data)
+
+## Output a Summary of the Model
+summary(ship_model)
+
+```
+
+## Comment on which coefficients are statistically significant per model summary above :
+
+#### - Coefficient "typeB" is significant at a .05 alpha level
+
+#### - Coefficients "construction1965-69" and "construction1970-74" are both significant at a .01 alpha level
+
+#### - Coefficient "operation1975-79" is significant at a .05 alpha level
+
+#### - None of the remaining coefficients were found to be statistically significant
+
+## Interpret Statistically Significant Model Coefficients in Context
+
+### Note : Model base group are ships of type=A, construction="1960-64", operation="1960-74"
+
+### Exponentiate the Coefficients exp(coeff) to obtain risk as compared to Base Group
+
+#### Increasing predictor variable by 1 unit has a multiplicative effect of exp(coeff) on the predicted mean damage count
+
+##### - typeB : Keeping all other variables constant, ships of Type B are predicted by the model to have 0.58 times the number of incidents of damage as compared to the base group
+
+##### - construction1965-69 : Keeping all other variables constant, ships constructed in 1965-1969 are predicted by the model to have 2.01 times the number of incidents of damage as compared to the base group
+
+##### - construction1970-74 : Keeping all other variables constant, ships constructed in 1970-1974 are predicted by the model to have 2.27 times the number of incidents of damage as compared to the base group
+
+##### - operation1975-79 : Keeping all other variables constant, ships operating in 1975-1979 are predicted by the model to have 1.47 times the number of incidents of damage as compared to the base group
+
+```{r}
+## Exponentiating Coefficients and rounding to two decimal places
+round(exp(coef(ship_model)), 2)
+```
